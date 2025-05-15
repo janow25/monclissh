@@ -1,0 +1,5 @@
+hosts:
+  - name: "name"
+    hostname: "[hostname]:[port]"
+    user: "user"
+    password: "password"
