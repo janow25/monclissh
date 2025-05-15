@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
-	"github.com/guptarohit/asciigraph"
-	"github.com/rivo/tview"
+	progress "github.com/charmbracelet/bubbles/progress"
+	tea "github.com/charmbracelet/bubbletea"
 
 	"monclissh/internal/config"
 	"monclissh/internal/metrics"
@@ -17,10 +16,31 @@ type HostMetrics struct {
 	CPU      float64
 	Disk     float64
 	Memory   float64
+	Error    string
 }
 
 type Dashboard struct {
 	Hosts []HostMetrics
+}
+
+type model struct {
+	hosts []hostBox
+	err   error
+}
+
+type tickMsg time.Time
+
+type metricsMsg struct{}
+
+type hostBox struct {
+	name    string
+	cpu     progress.Model
+	disk    progress.Model
+	memory  progress.Model
+	cpuVal  float64
+	diskVal float64
+	memVal  float64
+	loadErr string
 }
 
 func NewDashboard(hosts []config.Host) *Dashboard {
@@ -34,75 +54,109 @@ func NewDashboard(hosts []config.Host) *Dashboard {
 func (d *Dashboard) UpdateMetrics(collector *metrics.Collector) {
 	collectedMetrics, err := collector.Collect()
 	if err != nil {
-		fmt.Printf("Error collecting metrics: %v\n", err)
 		return
 	}
-
 	for i := range d.Hosts {
 		host := d.Hosts[i]
 		if metrics, ok := collectedMetrics[host.Hostname]; ok {
 			d.Hosts[i].CPU = metrics.CPU
 			d.Hosts[i].Disk = metrics.Disk
 			d.Hosts[i].Memory = metrics.Memory
+			d.Hosts[i].Error = metrics.Error
 		}
 	}
 }
 
-func (d *Dashboard) DisplayWithPieCharts() {
-	for _, host := range d.Hosts {
-		fmt.Printf("Host: %s\n", host.Hostname)
-
-		// CPU Pie Chart
-		cpuGraph := asciigraph.Plot([]float64{host.CPU, 100 - host.CPU}, asciigraph.Width(20), asciigraph.Height(10), asciigraph.Caption("CPU Usage"))
-		fmt.Println(cpuGraph)
-
-		// Disk Pie Chart
-		diskGraph := asciigraph.Plot([]float64{host.Disk, 100 - host.Disk}, asciigraph.Width(20), asciigraph.Height(10), asciigraph.Caption("Disk Usage"))
-		fmt.Println(diskGraph)
-
-		// Memory Pie Chart
-		memoryGraph := asciigraph.Plot([]float64{host.Memory, 100 - host.Memory}, asciigraph.Width(20), asciigraph.Height(10), asciigraph.Caption("Memory Usage"))
-		fmt.Println(memoryGraph)
-
-		fmt.Println("--------------------------------")
+func NewModel(cfg *config.HostConfig) model {
+	hosts := make([]hostBox, len(cfg.Hosts))
+	for i, h := range cfg.Hosts {
+		hosts[i] = hostBox{
+			name:   h.Name,
+			cpu:    progress.New(progress.WithScaledGradient("#00ff00", "#ff0000")),
+			disk:   progress.New(progress.WithScaledGradient("#00ff00", "#ff0000")),
+			memory: progress.New(progress.WithScaledGradient("#00ff00", "#ff0000")),
+		}
 	}
+	return model{hosts: hosts}
+}
+
+func (m model) Init() tea.Cmd {
+	return tick()
+}
+
+func tick() tea.Cmd {
+	return tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tickMsg:
+		return m, tea.Batch(tea.Cmd(func() tea.Msg { return metricsMsg{} }), tick())
+	case metricsMsg:
+		// This will be set in Start()
+		return m, nil
+	case tea.KeyMsg:
+		if msg.String() == "q" || msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m model) View() string {
+	if m.err != nil {
+		return fmt.Sprintf("Error: %v\n", m.err)
+	}
+	if len(m.hosts) == 0 {
+		return "No hosts configured.\n"
+	}
+	var out string
+	for i, host := range m.hosts {
+		if i > 0 {
+			out += "\n"
+		}
+		out += fmt.Sprintf("[ %s ]\n", host.name)
+		if host.loadErr != "" {
+			out += fmt.Sprintf("[red]Error: %s[white]\n", host.loadErr)
+			continue
+		}
+		out += fmt.Sprintf("CPU:    %s %5.1f%%\n", host.cpu.ViewAs(host.cpuVal/100), host.cpuVal)
+		out += fmt.Sprintf("Disk:   %s %5.1f%%\n", host.disk.ViewAs(host.diskVal/100), host.diskVal)
+		out += fmt.Sprintf("Memory: %s %5.1f%%\n", host.memory.ViewAs(host.memVal/100), host.memVal)
+	}
+	out += "\nPress q to quit."
+	return out
 }
 
 func Start(cfg *config.HostConfig) {
 	collector := metrics.NewCollector(cfg.Hosts)
-	dashboard := NewDashboard(cfg.Hosts)
-
-	app := tview.NewApplication()
-	grid := tview.NewGrid().SetRows(0).SetColumns(0).SetBorders(true)
-
-	updateGrid := func() {
-		dashboard.UpdateMetrics(collector)
-		app.QueueUpdateDraw(func() {
-			grid.Clear()
-
-			newPrimitive := func(title, text string) tview.Primitive {
-				return tview.NewFrame(nil).
-					SetBorders(0, 0, 0, 0, 0, 0).
-					AddText(text, true, tview.AlignCenter, tcell.ColorWhite)
-			}
-
-			for i, host := range dashboard.Hosts {
-				text := fmt.Sprintf("[yellow]CPU:[white] %.2f%%\n[yellow] Disk:[white] %.2f%%\n[yellow] Memory:[white] %.2f%%", host.CPU, host.Disk, host.Memory)
-				hostBox := newPrimitive(host.Hostname, text)
-
-				grid.AddItem(hostBox, i/2, i%2, 1, 1, 0, 0, false)
-			}
-		})
-	}
+	m := NewModel(cfg)
 
 	go func() {
 		for {
-			updateGrid()
-			time.Sleep(2 * time.Second)
+			time.Sleep(200 * time.Millisecond)
+			collectedMetrics, err := collector.Collect()
+			for i := range m.hosts {
+				host := &m.hosts[i]
+				if metrics, ok := collectedMetrics[host.name]; ok {
+					host.cpuVal = metrics.CPU
+					host.diskVal = metrics.Disk
+					host.memVal = metrics.Memory
+					host.loadErr = metrics.Error
+				} else {
+					host.loadErr = "No data"
+				}
+			}
+			if err != nil {
+				m.err = err
+			}
 		}
 	}()
 
-	if err := app.SetRoot(grid, true).Run(); err != nil {
-		fmt.Printf("Error running application: %v\n", err)
+	p := tea.NewProgram(m)
+	if err := p.Start(); err != nil {
+		fmt.Printf("Error running Bubble Tea program: %v\n", err)
 	}
 }

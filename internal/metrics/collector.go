@@ -7,10 +7,11 @@ import (
     "strconv"
     "strings"
     "sync"
-)
+)	
 
 type Metrics struct {
-    CPU    float64
+		Error  string
+		CPU    float64
     Disk   float64
     Memory float64
 }
@@ -35,7 +36,15 @@ func (c *Collector) Collect() (map[string]Metrics, error) {
 
             cpu, err := collectCPUFromConfig(h)
             if err != nil {
-                fmt.Printf("Error collecting CPU for host %s: %v\n", h.Name, err)
+                // fmt.Printf("Error collecting CPU for host %s: %v\n", h.Name, err)
+								c.mu.Lock()
+								metrics[h.Name] = Metrics{
+									Error:  err.Error(),
+									CPU:    0,
+									Disk:   0,
+									Memory: 0,
+								}
+								c.mu.Unlock()
                 return
             }
             disk, err := collectDiskFromConfig(h)
@@ -51,6 +60,7 @@ func (c *Collector) Collect() (map[string]Metrics, error) {
 
             c.mu.Lock()
             metrics[h.Name] = Metrics{
+								Error:  "",
                 CPU:    cpu,
                 Disk:   disk,
                 Memory: memory,
