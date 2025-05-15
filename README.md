@@ -13,7 +13,7 @@ Monclissh is a command-line interface (CLI) tool designed to monitor and display
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/monclissh.git
+   git clone https://github.com/janow25/monclissh.git
    cd monclissh
    ```
 
@@ -31,21 +31,32 @@ The application requires a configuration file named `hosts.yaml` located in the 
 ```yaml
 hosts:
   - name: "Host1"
-    ip: "192.168.1.1"
-    user: "username"
+    hostname: "192.168.1.1"
+    username: "username"
     password: "password"
   - name: "Host2"
-    ip: "192.168.1.2"
-    user: "username"
+    hostname: "192.168.1.2"
+    username: "username"
     password: "password"
 ```
+
+- `name`: Display name for the host
+- `hostname`: Host IP address or DNS name
+- `username`: SSH username
+- `password`: SSH password
 
 ## Usage
 
 To run the application, execute the following command:
 
 ```
-./monclissh
+monclissh
+```
+
+You can also specify the update interval for metrics collection (default is 2s):
+
+```
+monclissh -t 5s
 ```
 
 The dashboard will start and display the metrics for the configured hosts. The metrics will be updated periodically.
