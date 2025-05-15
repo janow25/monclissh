@@ -37,6 +37,7 @@ type model struct {
 	keys              keyMap
 	help              help.Model
 	windowHeight      int
+	collecting        bool // add this field
 }
 
 type tickMsg time.Time
@@ -88,22 +89,6 @@ func NewDashboard(hosts []config.Host) *Dashboard {
 	return &Dashboard{Hosts: metrics}
 }
 
-func (d *Dashboard) UpdateMetrics(collector *metrics.Collector) {
-	collectedMetrics, err := collector.Collect()
-	if err != nil {
-		return
-	}
-	for i := range d.Hosts {
-		host := d.Hosts[i]
-		if metrics, ok := collectedMetrics[host.Hostname]; ok {
-			d.Hosts[i].CPU = metrics.CPU
-			d.Hosts[i].Disk = metrics.Disk
-			d.Hosts[i].Memory = metrics.Memory
-			d.Hosts[i].Error = metrics.Error
-		}
-	}
-}
-
 func NewModel(cfg *config.HostConfig, updateInterval time.Duration) model {
 	hosts := make([]hostBox, len(cfg.Hosts))
 	for i, h := range cfg.Hosts {
@@ -131,7 +116,7 @@ func (m model) Init() tea.Cmd {
 }
 
 func tick() tea.Cmd {
-	return tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
+	return tea.Tick(1000*time.Millisecond, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
@@ -176,12 +161,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tickMsg:
 		now := time.Now()
-		if now.Sub(m.lastMetricsUpdate) >= m.updateInterval {
-			m.lastMetricsUpdate = now
+		if !m.collecting && now.Sub(m.lastMetricsUpdate) >= m.updateInterval {
+			m.collecting = true
 			return m, tea.Batch(append([]tea.Cmd{collectMetricsCmd(m.hostsCfg), tick()}, cmds...)...)
 		}
 		return m, tea.Batch(append([]tea.Cmd{tick()}, cmds...)...)
 	case metricsResultMsg:
+		m.lastMetricsUpdate = time.Now()
+		m.collecting = false
 		for i := range m.hosts {
 			host := &m.hosts[i]
 			if metrics, ok := msg.collected[host.name]; ok {
@@ -189,7 +176,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				host.diskVal = metrics.Disk
 				host.memVal = metrics.Memory
 				host.loadErr = metrics.Error
-				host.loaded = true // mark as loaded
+				host.loaded = true
 			} else {
 				host.loadErr = "No data"
 			}
