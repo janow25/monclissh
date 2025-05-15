@@ -8,7 +8,9 @@ import (
 	help "github.com/charmbracelet/bubbles/help"
 	key "github.com/charmbracelet/bubbles/key"
 	progress "github.com/charmbracelet/bubbles/progress"
+	spinner "github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"monclissh/internal/config"
 	"monclissh/internal/metrics"
@@ -31,6 +33,7 @@ type model struct {
 	hostsCfg          []config.Host
 	err               error
 	lastMetricsUpdate time.Time
+	updateInterval    time.Duration // add this field
 	keys              keyMap
 	help              help.Model
 	windowHeight      int
@@ -53,6 +56,8 @@ type hostBox struct {
 	diskVal float64
 	memVal  float64
 	loadErr string
+	loaded  bool          // new field to track if metrics are loaded
+	spinner spinner.Model // spinner for loading
 }
 
 // KeyMap for help
@@ -99,21 +104,30 @@ func (d *Dashboard) UpdateMetrics(collector *metrics.Collector) {
 	}
 }
 
-func NewModel(cfg *config.HostConfig) model {
+func NewModel(cfg *config.HostConfig, updateInterval time.Duration) model {
 	hosts := make([]hostBox, len(cfg.Hosts))
 	for i, h := range cfg.Hosts {
+		s := spinner.New()
+		s.Spinner = spinner.Dot
+		s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 		hosts[i] = hostBox{
-			name:   h.Name,
-			cpu:    progress.New(progress.WithScaledGradient("#00ff00", "#ff0000")),
-			disk:   progress.New(progress.WithScaledGradient("#00ff00", "#ff0000")),
-			memory: progress.New(progress.WithScaledGradient("#00ff00", "#ff0000")),
+			name:    h.Name,
+			cpu:     progress.New(progress.WithScaledGradient("#00ff00", "#ff0000")),
+			disk:    progress.New(progress.WithScaledGradient("#00ff00", "#ff0000")),
+			memory:  progress.New(progress.WithScaledGradient("#00ff00", "#ff0000")),
+			spinner: s,
 		}
 	}
-	return model{hosts: hosts, hostsCfg: cfg.Hosts, keys: keys, help: help.New()}
+	return model{hosts: hosts, hostsCfg: cfg.Hosts, updateInterval: updateInterval, keys: keys, help: help.New()}
 }
 
 func (m model) Init() tea.Cmd {
-	return tick()
+	cmds := make([]tea.Cmd, 0, len(m.hosts)+1)
+	for i := range m.hosts {
+		cmds = append(cmds, m.hosts[i].spinner.Tick)
+	}
+	cmds = append(cmds, tick())
+	return tea.Batch(cmds...)
 }
 
 func tick() tea.Cmd {
@@ -151,14 +165,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
 		m.windowHeight = ws.Height
 	}
+	// Update all spinners
+	cmds := make([]tea.Cmd, len(m.hosts))
+	for i := range m.hosts {
+		host := &m.hosts[i]
+		var cmd tea.Cmd
+		host.spinner, cmd = host.spinner.Update(msg)
+		cmds[i] = cmd
+	}
 	switch msg := msg.(type) {
 	case tickMsg:
 		now := time.Now()
-		if now.Sub(m.lastMetricsUpdate) >= 2*time.Second {
+		if now.Sub(m.lastMetricsUpdate) >= m.updateInterval {
 			m.lastMetricsUpdate = now
-			return m, tea.Batch(collectMetricsCmd(m.hostsCfg), tick())
+			return m, tea.Batch(append([]tea.Cmd{collectMetricsCmd(m.hostsCfg), tick()}, cmds...)...)
 		}
-		return m, tick()
+		return m, tea.Batch(append([]tea.Cmd{tick()}, cmds...)...)
 	case metricsResultMsg:
 		for i := range m.hosts {
 			host := &m.hosts[i]
@@ -167,6 +189,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				host.diskVal = metrics.Disk
 				host.memVal = metrics.Memory
 				host.loadErr = metrics.Error
+				host.loaded = true // mark as loaded
 			} else {
 				host.loadErr = "No data"
 			}
@@ -174,9 +197,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err
 		}
-		return m, nil
+		return m, tea.Batch(cmds...)
 	}
-	return m, nil
+	return m, tea.Batch(cmds...)
 }
 
 func (m model) View() string {
@@ -192,6 +215,10 @@ func (m model) View() string {
 			out += "\n"
 		}
 		out += fmt.Sprintf("[ %s ]\n", host.name)
+		if !host.loaded {
+			out += fmt.Sprintf("%s Connecting to hosts\n", host.spinner.View())
+			continue
+		}
 		if host.loadErr != "" {
 			out += fmt.Sprintf("\033[31m%s\033[0m\n", host.loadErr)
 			continue
@@ -242,8 +269,8 @@ func (m model) View() string {
 	return out
 }
 
-func Start(cfg *config.HostConfig) {
-	m := NewModel(cfg)
+func Start(cfg *config.HostConfig, updateInterval time.Duration) {
+	m := NewModel(cfg, updateInterval)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
 	if err != nil {
