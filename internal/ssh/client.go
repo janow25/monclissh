@@ -2,6 +2,7 @@ package ssh
 
 import (
     "golang.org/x/crypto/ssh"
+    "monclissh/internal/config"
     "time"
 )
 
@@ -30,6 +31,28 @@ func NewSSHClient(hostname string, user string, password string) (*SSHClient, er
         Client: client,
         Config: config,
         Hostname: hostname,
+    }, nil
+}
+
+func NewSSHClientFromConfig(hostConfig config.Host) (*SSHClient, error) {
+    config := &ssh.ClientConfig{
+        User: hostConfig.Username, // Updated from User to Username
+        Auth: []ssh.AuthMethod{
+            ssh.Password(hostConfig.Password),
+        },
+        HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+        Timeout:         5 * time.Second,
+    }
+
+    client, err := ssh.Dial("tcp", hostConfig.Hostname, config) // Updated from Address to Hostname
+    if err != nil {
+        return nil, err
+    }
+
+    return &SSHClient{
+        Client: client,
+        Config: config,
+        Hostname: hostConfig.Hostname, // Updated from Address to Hostname
     }, nil
 }
 

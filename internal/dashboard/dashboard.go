@@ -5,6 +5,7 @@ import (
     "time"
 
     "monclissh/internal/config"
+    "monclissh/internal/metrics"
 )
 
 type HostMetrics struct {
@@ -26,12 +27,20 @@ func NewDashboard(hosts []config.Host) *Dashboard {
     return &Dashboard{Hosts: metrics}
 }
 
-func (d *Dashboard) UpdateMetrics() {
+func (d *Dashboard) UpdateMetrics(collector *metrics.Collector) {
+    collectedMetrics, err := collector.Collect()
+    if err != nil {
+        fmt.Printf("Error collecting metrics: %v\n", err)
+        return
+    }
+
     for i := range d.Hosts {
-        // Here you would call the metrics collection functions
-        // For example: d.Hosts[i].CPU = collectCPU(d.Hosts[i].Hostname)
-        // d.Hosts[i].Disk = collectDisk(d.Hosts[i].Hostname)
-        // d.Hosts[i].Memory = collectMemory(d.Hosts[i].Hostname)
+        host := d.Hosts[i]
+        if metrics, ok := collectedMetrics[host.Hostname]; ok {
+            d.Hosts[i].CPU = metrics.CPU
+            d.Hosts[i].Disk = metrics.Disk
+            d.Hosts[i].Memory = metrics.Memory
+        }
     }
 }
 
@@ -42,15 +51,13 @@ func (d *Dashboard) Display() {
     }
 }
 
-func (d *Dashboard) Start(refreshInterval time.Duration) {
-    for {
-        d.UpdateMetrics()
-        d.Display()
-        time.Sleep(refreshInterval)
-    }
-}
-
 func Start(cfg *config.HostConfig) {
+    collector := metrics.NewCollector(cfg.Hosts)
     dashboard := NewDashboard(cfg.Hosts)
-    dashboard.Start(5 * time.Second)
+
+    for {
+        dashboard.UpdateMetrics(collector)
+        dashboard.Display()
+        time.Sleep(100 * time.Millisecond)
+    }
 }

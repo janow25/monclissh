@@ -2,6 +2,10 @@ package metrics
 
 import (
     "fmt"
+    "monclissh/internal/config"
+    "monclissh/internal/ssh"
+    "strconv"
+    "strings"
     "sync"
 )
 
@@ -12,11 +16,11 @@ type Metrics struct {
 }
 
 type Collector struct {
-    hosts []string
+    hosts []config.Host
     mu    sync.Mutex
 }
 
-func NewCollector(hosts []string) *Collector {
+func NewCollector(hosts []config.Host) *Collector {
     return &Collector{hosts: hosts}
 }
 
@@ -26,26 +30,27 @@ func (c *Collector) Collect() (map[string]Metrics, error) {
 
     for _, host := range c.hosts {
         wg.Add(1)
-        go func(h string) {
+        go func(h config.Host) {
             defer wg.Done()
-            cpu, err := collectCPU(h)
+
+            cpu, err := collectCPUFromConfig(h)
             if err != nil {
-                fmt.Printf("Error collecting CPU for host %s: %v\n", h, err)
+                fmt.Printf("Error collecting CPU for host %s: %v\n", h.Name, err)
                 return
             }
-            disk, err := collectDisk(h)
+            disk, err := collectDiskFromConfig(h)
             if err != nil {
-                fmt.Printf("Error collecting Disk for host %s: %v\n", h, err)
+                fmt.Printf("Error collecting Disk for host %s: %v\n", h.Name, err)
                 return
             }
-            memory, err := collectMemory(h)
+            memory, err := collectMemoryFromConfig(h)
             if err != nil {
-                fmt.Printf("Error collecting Memory for host %s: %v\n", h, err)
+                fmt.Printf("Error collecting Memory for host %s: %v\n", h.Name, err)
                 return
             }
 
             c.mu.Lock()
-            metrics[h] = Metrics{
+            metrics[h.Name] = Metrics{
                 CPU:    cpu,
                 Disk:   disk,
                 Memory: memory,
@@ -58,18 +63,62 @@ func (c *Collector) Collect() (map[string]Metrics, error) {
     return metrics, nil
 }
 
-// Placeholder functions for collecting metrics
-func collectCPU(host string) (float64, error) {
-    // Implement CPU collection logic
-    return 0.0, nil
+func collectCPUFromConfig(hostConfig config.Host) (float64, error) {
+    client, err := ssh.NewSSHClientFromConfig(hostConfig)
+    if err != nil {
+        return 0, err
+    }
+    defer client.Close()
+
+    output, err := client.ExecuteCommand("top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'")
+    if err != nil {
+        return 0, err
+    }
+
+    usage, err := strconv.ParseFloat(strings.TrimSpace(output), 64)
+    if err != nil {
+        return 0, err
+    }
+
+    return usage, nil
 }
 
-func collectDisk(host string) (float64, error) {
-    // Implement Disk collection logic
-    return 0.0, nil
+func collectDiskFromConfig(hostConfig config.Host) (float64, error) {
+    client, err := ssh.NewSSHClientFromConfig(hostConfig)
+    if err != nil {
+        return 0, err
+    }
+    defer client.Close()
+
+    output, err := client.ExecuteCommand("df / | tail -1 | awk '{print $5}' | sed 's/%//'")
+    if err != nil {
+        return 0, err
+    }
+
+    usage, err := strconv.ParseFloat(strings.TrimSpace(output), 64)
+    if err != nil {
+        return 0, err
+    }
+
+    return usage, nil
 }
 
-func collectMemory(host string) (float64, error) {
-    // Implement Memory collection logic
-    return 0.0, nil
+func collectMemoryFromConfig(hostConfig config.Host) (float64, error) {
+    client, err := ssh.NewSSHClientFromConfig(hostConfig)
+    if err != nil {
+        return 0, err
+    }
+    defer client.Close()
+
+    output, err := client.ExecuteCommand("free | grep Mem | awk '{print $3/$2 * 100.0}'")
+    if err != nil {
+        return 0, err
+    }
+
+    usage, err := strconv.ParseFloat(strings.TrimSpace(output), 64)
+    if err != nil {
+        return 0, err
+    }
+
+    return usage, nil
 }
