@@ -33,11 +33,12 @@ type model struct {
 	hostsCfg          []config.Host
 	err               error
 	lastMetricsUpdate time.Time
-	updateInterval    time.Duration // add this field
+	updateInterval    time.Duration
 	keys              keyMap
 	help              help.Model
 	windowHeight      int
-	collecting        bool // add this field
+	collecting        bool
+	debug             bool // add debug flag
 }
 
 type tickMsg time.Time
@@ -57,8 +58,9 @@ type hostBox struct {
 	diskVal float64
 	memVal  float64
 	loadErr string
-	loaded  bool          // new field to track if metrics are loaded
-	spinner spinner.Model // spinner for loading
+	loaded  bool
+	isValid bool
+	spinner spinner.Model
 }
 
 // KeyMap for help
@@ -89,7 +91,7 @@ func NewDashboard(hosts []config.Host) *Dashboard {
 	return &Dashboard{Hosts: metrics}
 }
 
-func NewModel(cfg *config.HostConfig, updateInterval time.Duration) model {
+func NewModel(cfg *config.HostConfig, updateInterval time.Duration, debug bool) model {
 	hosts := make([]hostBox, len(cfg.Hosts))
 	for i, h := range cfg.Hosts {
 		s := spinner.New()
@@ -103,7 +105,7 @@ func NewModel(cfg *config.HostConfig, updateInterval time.Duration) model {
 			spinner: s,
 		}
 	}
-	return model{hosts: hosts, hostsCfg: cfg.Hosts, updateInterval: updateInterval, keys: keys, help: help.New()}
+	return model{hosts: hosts, hostsCfg: cfg.Hosts, updateInterval: updateInterval, keys: keys, help: help.New(), debug: debug}
 }
 
 func (m model) Init() tea.Cmd {
@@ -171,14 +173,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.collecting = false
 		for i := range m.hosts {
 			host := &m.hosts[i]
-			if metrics, ok := msg.collected[host.name]; ok {
+			if metrics, ok := msg.collected[host.name]; ok && metrics.Error == "" {
 				host.cpuVal = metrics.CPU
 				host.diskVal = metrics.Disk
 				host.memVal = metrics.Memory
 				host.loadErr = metrics.Error
 				host.loaded = true
+				host.isValid = true
 			} else {
-				host.loadErr = "No data"
+				host.loadErr = metrics.Error
+				host.loaded = true
+				host.isValid = false
 			}
 		}
 		if msg.err != nil {
@@ -200,6 +205,10 @@ func (m model) View() string {
 	for i, host := range m.hosts {
 		if i > 0 {
 			out += "\n"
+		}
+		// Only show hosts with errors if debug is true or if host.loaded is true
+		if host.loadErr != "" && !host.isValid && !m.debug {
+			continue
 		}
 		out += fmt.Sprintf("[ %s ]\n", host.name)
 		if !host.loaded {
@@ -256,8 +265,8 @@ func (m model) View() string {
 	return out
 }
 
-func Start(cfg *config.HostConfig, updateInterval time.Duration) {
-	m := NewModel(cfg, updateInterval)
+func Start(cfg *config.HostConfig, updateInterval time.Duration, debug bool) {
+	m := NewModel(cfg, updateInterval, debug)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
 	if err != nil {
