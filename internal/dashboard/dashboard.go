@@ -24,8 +24,9 @@ type Dashboard struct {
 }
 
 type model struct {
-	hosts []hostBox
-	err   error
+	hosts    []hostBox
+	hostsCfg []config.Host
+	err      error
 }
 
 type tickMsg time.Time
@@ -77,7 +78,7 @@ func NewModel(cfg *config.HostConfig) model {
 			memory: progress.New(progress.WithScaledGradient("#00ff00", "#ff0000")),
 		}
 	}
-	return model{hosts: hosts}
+	return model{hosts: hosts, hostsCfg: cfg.Hosts}
 }
 
 func (m model) Init() tea.Cmd {
@@ -91,16 +92,34 @@ func tick() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
+	// Prioritize key events for immediate response
+	if key, ok := msg.(tea.KeyMsg); ok {
+		if key.String() == "q" || key.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+	}
+	switch msg.(type) {
 	case tickMsg:
 		return m, tea.Batch(tea.Cmd(func() tea.Msg { return metricsMsg{} }), tick())
 	case metricsMsg:
-		// This will be set in Start()
-		return m, nil
-	case tea.KeyMsg:
-		if msg.String() == "q" || msg.String() == "ctrl+c" {
-			return m, tea.Quit
+		// Collect metrics here
+		collector := metrics.NewCollector(m.hostsCfg)
+		collectedMetrics, err := collector.Collect()
+		for i := range m.hosts {
+			host := &m.hosts[i]
+			if metrics, ok := collectedMetrics[host.name]; ok {
+				host.cpuVal = metrics.CPU
+				host.diskVal = metrics.Disk
+				host.memVal = metrics.Memory
+				host.loadErr = metrics.Error
+			} else {
+				host.loadErr = "No data"
+			}
 		}
+		if err != nil {
+			m.err = err
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -119,44 +138,45 @@ func (m model) View() string {
 		}
 		out += fmt.Sprintf("[ %s ]\n", host.name)
 		if host.loadErr != "" {
-			out += fmt.Sprintf("[red]Error: %s[white]\n", host.loadErr)
+			out += fmt.Sprintf("\033[31m%s\033[0m\n", host.loadErr)
 			continue
 		}
-		out += fmt.Sprintf("CPU:    %s %5.1f%%\n", host.cpu.ViewAs(host.cpuVal/100), host.cpuVal)
-		out += fmt.Sprintf("Disk:   %s %5.1f%%\n", host.disk.ViewAs(host.diskVal/100), host.diskVal)
-		out += fmt.Sprintf("Memory: %s %5.1f%%\n", host.memory.ViewAs(host.memVal/100), host.memVal)
+
+		// Helper to color percentage text
+		colorPercent := func(val float64) string {
+			var color string
+			switch {
+			case val > 80:
+				color = "\033[31m" // red
+			case val > 50:
+				color = "\033[33m" // yellow
+			default:
+				color = "\033[32m" // green
+			}
+			return fmt.Sprintf("%s%5.1f%%\033[0m", color, val)
+		}
+
+		// Always show full gradient for background, fill is always green
+		barOpts := []progress.Option{
+			progress.WithGradient("#00ff00", "#ff0000"),
+		}
+		cpuBar := progress.New(barOpts...)
+		diskBar := progress.New(barOpts...)
+		memBar := progress.New(barOpts...)
+
+		out += fmt.Sprintf("CPU:    %s %s\n", cpuBar.ViewAs(host.cpuVal/100), colorPercent(host.cpuVal))
+		out += fmt.Sprintf("Disk:   %s %s\n", diskBar.ViewAs(host.diskVal/100), colorPercent(host.diskVal))
+		out += fmt.Sprintf("Memory: %s %s\n", memBar.ViewAs(host.memVal/100), colorPercent(host.memVal))
 	}
 	out += "\nPress q to quit."
 	return out
 }
 
 func Start(cfg *config.HostConfig) {
-	collector := metrics.NewCollector(cfg.Hosts)
 	m := NewModel(cfg)
-
-	go func() {
-		for {
-			time.Sleep(200 * time.Millisecond)
-			collectedMetrics, err := collector.Collect()
-			for i := range m.hosts {
-				host := &m.hosts[i]
-				if metrics, ok := collectedMetrics[host.name]; ok {
-					host.cpuVal = metrics.CPU
-					host.diskVal = metrics.Disk
-					host.memVal = metrics.Memory
-					host.loadErr = metrics.Error
-				} else {
-					host.loadErr = "No data"
-				}
-			}
-			if err != nil {
-				m.err = err
-			}
-		}
-	}()
-
-	p := tea.NewProgram(m)
-	if err := p.Start(); err != nil {
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	_, err := p.Run()
+	if err != nil {
 		fmt.Printf("Error running Bubble Tea program: %v\n", err)
 	}
 }
