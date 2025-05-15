@@ -38,12 +38,11 @@ type model struct {
 	help              help.Model
 	windowHeight      int
 	collecting        bool
-	debug             bool // add debug flag
+	debug             bool
 }
 
 type tickMsg time.Time
 
-// Define a message to carry metrics results
 type metricsResultMsg struct {
 	collected map[string]HostMetrics
 	err       error
@@ -63,8 +62,6 @@ type hostBox struct {
 	spinner spinner.Model
 }
 
-// KeyMap for help
-// keyMap defines a set of keybindings. To work for help it must satisfy key.Map.
 type keyMap struct {
 	Quit key.Binding
 }
@@ -118,17 +115,15 @@ func (m model) Init() tea.Cmd {
 }
 
 func tick() tea.Cmd {
-	return tea.Tick(1000*time.Millisecond, func(t time.Time) tea.Msg {
+	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
 
-// Async command to collect metrics
 func collectMetricsCmd(hostsCfg []config.Host) tea.Cmd {
 	return func() tea.Msg {
 		collector := metrics.NewCollector(hostsCfg)
 		collected, err := collector.Collect()
-		// Convert collected to map[string]HostMetrics if needed
 		result := make(map[string]HostMetrics)
 		for k, v := range collected {
 			result[k] = HostMetrics{
@@ -152,7 +147,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
 		m.windowHeight = ws.Height
 	}
-	// Update all spinners
 	cmds := make([]tea.Cmd, len(m.hosts))
 	for i := range m.hosts {
 		host := &m.hosts[i]
@@ -206,7 +200,6 @@ func (m model) View() string {
 		if i > 0 {
 			out += "\n"
 		}
-		// Only show hosts with errors if debug is true or if host.loaded is true
 		if host.loadErr != "" && !host.isValid && !m.debug {
 			continue
 		}
@@ -220,21 +213,19 @@ func (m model) View() string {
 			continue
 		}
 
-		// Helper to color percentage text
 		colorPercent := func(val float64) string {
 			var color string
 			switch {
 			case val > 80:
-				color = "\033[31m" // red
+				color = "\033[31m"
 			case val > 50:
-				color = "\033[33m" // yellow
+				color = "\033[33m"
 			default:
-				color = "\033[32m" // green
+				color = "\033[32m"
 			}
 			return fmt.Sprintf("%s%5.1f%%\033[0m", color, val)
 		}
 
-		// Always show full gradient for background, fill is always green
 		barOpts := []progress.Option{
 			progress.WithGradient("#00ff00", "#ff0000"),
 			progress.WithoutPercentage(),
@@ -247,7 +238,6 @@ func (m model) View() string {
 		out += fmt.Sprintf("Disk:   %s %s\n", diskBar.ViewAs(host.diskVal/100), colorPercent(host.diskVal))
 		out += fmt.Sprintf("Memory: %s %s\n", memBar.ViewAs(host.memVal/100), colorPercent(host.memVal))
 	}
-	// Pad with newlines to push help to the bottom
 	helpView := m.help.View(m.keys)
 	lines := 0
 	for _, c := range out {
@@ -256,7 +246,7 @@ func (m model) View() string {
 		}
 	}
 	if m.windowHeight > 0 {
-		pad := m.windowHeight - lines - len(helpView)/80 - 1 // crude line estimate
+		pad := m.windowHeight - lines - len(helpView)/80 - 1
 		if pad > 0 {
 			out += strings.Repeat("\n", pad)
 		}

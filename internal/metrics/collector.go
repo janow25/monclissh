@@ -28,8 +28,6 @@ func (c *Collector) Collect() (map[string]Metrics, error) {
 	metrics := make(map[string]Metrics)
 	var wg sync.WaitGroup
 
-	// fmt.Println("Starting metrics collection...")
-
 	for _, host := range c.hosts {
 		wg.Add(1)
 		go func(h config.Host) {
@@ -38,12 +36,7 @@ func (c *Collector) Collect() (map[string]Metrics, error) {
 			client, err := ssh.NewSSHClientFromConfig(h)
 			if err != nil {
 				c.mu.Lock()
-				metrics[h.Name] = Metrics{
-					Error:  err.Error(),
-					CPU:    0,
-					Disk:   0,
-					Memory: 0,
-				}
+				metrics[h.Name] = Metrics{Error: err.Error()}
 				c.mu.Unlock()
 				return
 			}
@@ -52,23 +45,13 @@ func (c *Collector) Collect() (map[string]Metrics, error) {
 			cpu, disk, memory, err := collectAllMetrics(client)
 			if err != nil {
 				c.mu.Lock()
-				metrics[h.Name] = Metrics{
-					Error:  err.Error(),
-					CPU:    0,
-					Disk:   0,
-					Memory: 0,
-				}
+				metrics[h.Name] = Metrics{Error: err.Error()}
 				c.mu.Unlock()
 				return
 			}
 
 			c.mu.Lock()
-			metrics[h.Name] = Metrics{
-				Error:  "",
-				CPU:    cpu,
-				Disk:   disk,
-				Memory: memory,
-			}
+			metrics[h.Name] = Metrics{CPU: cpu, Disk: disk, Memory: memory}
 			c.mu.Unlock()
 		}(host)
 	}
